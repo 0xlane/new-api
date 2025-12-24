@@ -578,7 +578,7 @@ export const useLogsData = () => {
         }
         
         expandDataLocal.push({
-          key: t('输入'),
+          key: t('模型输入'),
           value: (
             <Paragraph
               ellipsis={{
@@ -599,7 +599,7 @@ export const useLogsData = () => {
       // 添加输出内容
       if (other?.output_content) {
         expandDataLocal.push({
-          key: t('输出'),
+          key: t('模型输出'),
           value: (
             <Paragraph
               ellipsis={{
