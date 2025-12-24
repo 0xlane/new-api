@@ -15,13 +15,14 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Configure Git
         run: |
@@ -120,7 +121,7 @@ jobs:
       - name: Create Pull Request
         if: steps.check_tag.outputs.should_sync == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.get_release.outputs.latest_tag }}"
           BRANCH_NAME="${{ steps.check_tag.outputs.branch_name }}"
