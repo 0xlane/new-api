@@ -1,0 +1,186 @@
+name: Sync Upstream Release
+
+on:
+  schedule:
+    # 每天 UTC 时间 0 点（北京时间早上 8 点）检查上游更新
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 允许手动触发
+
+env:
+  UPSTREAM_REPO: QuantumNous/new-api
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
+          git fetch upstream --tags
+
+      - name: Get latest upstream release tag
+        id: get_release
+        run: |
+          # 获取上游最新的 release tag
+          LATEST_TAG=$(curl -s https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest | jq -r .tag_name)
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "📦 Latest upstream release: $LATEST_TAG"
+
+      - name: Check if tag exists locally
+        id: check_tag
+        run: |
+          TAG="${{ steps.get_release.outputs.latest_tag }}"
+          if [ "$TAG" = "null" ] || [ -z "$TAG" ]; then
+            echo "❌ No release tag found"
+            echo "should_sync=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 检查本地是否已有这个 tag 的同步分支或 PR
+          BRANCH_NAME="sync-upstream-${TAG}"
+          
+          # 检查分支是否存在
+          if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
+            echo "✅ Sync branch already exists: $BRANCH_NAME"
+            echo "should_sync=false" >> $GITHUB_OUTPUT
+          else
+            echo "🔄 New release detected, will create sync PR"
+            echo "should_sync=true" >> $GITHUB_OUTPUT
+            echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch upstream tag
+        if: steps.check_tag.outputs.should_sync == 'true'
+        run: |
+          git fetch upstream tag ${{ steps.get_release.outputs.latest_tag }} --no-tags
+
+      - name: Create sync branch
+        if: steps.check_tag.outputs.should_sync == 'true'
+        run: |
+          BRANCH_NAME="${{ steps.check_tag.outputs.branch_name }}"
+          git checkout -b "$BRANCH_NAME"
+          echo "✅ Created branch: $BRANCH_NAME"
+
+      - name: Merge upstream release
+        if: steps.check_tag.outputs.should_sync == 'true'
+        id: merge
+        run: |
+          TAG="${{ steps.get_release.outputs.latest_tag }}"
+          
+          # 尝试合并上游 tag
+          if git merge "$TAG" --no-edit; then
+            echo "✅ Merge successful"
+            echo "has_conflicts=false" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Merge has conflicts"
+            echo "has_conflicts=true" >> $GITHUB_OUTPUT
+            
+            # 列出冲突文件
+            echo "Conflicting files:"
+            git diff --name-only --diff-filter=U
+            
+            # 保留冲突标记，让人工处理
+            git add -A
+            git commit -m "Merge upstream $TAG (conflicts need resolution)" --no-verify || true
+          fi
+
+      - name: Push sync branch
+        if: steps.check_tag.outputs.should_sync == 'true'
+        run: |
+          BRANCH_NAME="${{ steps.check_tag.outputs.branch_name }}"
+          git push origin "$BRANCH_NAME"
+          echo "✅ Pushed branch: $BRANCH_NAME"
+
+      - name: Get upstream release notes
+        if: steps.check_tag.outputs.should_sync == 'true'
+        id: release_notes
+        run: |
+          NOTES=$(curl -s https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest | jq -r .body | head -c 3000)
+          # 转义特殊字符
+          NOTES="${NOTES//'%'/'%25'}"
+          NOTES="${NOTES//$'\n'/'%0A'}"
+          NOTES="${NOTES//$'\r'/'%0D'}"
+          echo "notes=$NOTES" >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request
+        if: steps.check_tag.outputs.should_sync == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.get_release.outputs.latest_tag }}"
+          BRANCH_NAME="${{ steps.check_tag.outputs.branch_name }}"
+          HAS_CONFLICTS="${{ steps.merge.outputs.has_conflicts }}"
+          
+          # 构建 PR 描述
+          if [ "$HAS_CONFLICTS" = "true" ]; then
+            CONFLICT_WARNING="## ⚠️ 合并冲突
+
+          此 PR 存在合并冲突，需要手动解决。请特别注意以下可能被修改的文件：
+          - \`model/log.go\` - 日志记录相关
+          - \`controller/relay.go\` - 错误处理相关
+          - \`service/quota.go\` - 配额消费相关
+
+          "
+          else
+            CONFLICT_WARNING=""
+          fi
+          
+          gh pr create \
+            --title "🔄 Sync upstream release ${TAG}" \
+            --body "${CONFLICT_WARNING}## 📦 上游更新
+
+          此 PR 自动同步上游仓库 [${UPSTREAM_REPO}](https://github.com/${UPSTREAM_REPO}) 的最新 release。
+
+          **Release 版本:** \`${TAG}\`
+          **Release 链接:** https://github.com/${UPSTREAM_REPO}/releases/tag/${TAG}
+
+          ## 📋 检查清单
+
+          合并前请确认：
+          - [ ] 检查是否有冲突需要解决
+          - [ ] 确认自定义的日志记录代码没有被覆盖
+          - [ ] 本地测试通过
+
+          ## 📝 上游 Release Notes
+
+          <details>
+          <summary>点击展开</summary>
+
+          ${{ steps.release_notes.outputs.notes }}
+
+          </details>
+          " \
+            --base main \
+            --head "$BRANCH_NAME" \
+            --label "upstream-sync"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 同步结果" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.check_tag.outputs.should_sync }}" = "true" ]; then
+            echo "✅ 已创建同步 PR for release \`${{ steps.get_release.outputs.latest_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ 无需同步，当前已是最新或同步分支已存在" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**上游最新版本:** \`${{ steps.get_release.outputs.latest_tag }}\`" >> $GITHUB_STEP_SUMMARY
+

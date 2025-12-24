@@ -148,4 +148,7 @@ func initConstantEnv() {
 		}
 		constant.TaskPricePatches = taskPricePatches
 	}
+
+	// 是否启用记录聊天内容
+	LogChatContentEnabled = GetEnvOrDefaultBool("LOG_CHAT_CONTENT_ENABLED", false)
 }

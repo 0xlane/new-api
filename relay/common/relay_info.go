@@ -116,6 +116,9 @@ type RelayInfo struct {
 	FinalPreConsumedQuota  int  // 最终预消耗的配额
 	IsClaudeBetaQuery      bool // /v1/messages?beta=true
 
+	PromptMessages         interface{}            // 保存请求的消息内容
+	Other                  map[string]interface{} // 用于存储额外信息，如输入输出内容
+
 	PriceData types.PriceData
 
 	Request dto.Request
@@ -354,6 +357,14 @@ func GenRelayInfoGemini(c *gin.Context, request dto.Request) *RelayInfo {
 	info.RelayFormat = types.RelayFormatGemini
 	info.ShouldIncludeUsage = false
 
+	geminiRequest := &dto.GeminiChatRequest{}
+	if err := common.UnmarshalBodyReusable(c, geminiRequest); err != nil {
+		return info
+	}
+
+	// 保存请求消息内容，用于记录日志
+	info.PromptMessages = geminiRequest.Contents
+
 	return info
 }
 
@@ -366,6 +377,20 @@ func GenRelayInfoImage(c *gin.Context, request dto.Request) *RelayInfo {
 func GenRelayInfoOpenAI(c *gin.Context, request dto.Request) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
 	info.RelayFormat = types.RelayFormatOpenAI
+
+	textRequest := &dto.GeneralOpenAIRequest{}
+	if err := common.UnmarshalBodyReusable(c, textRequest); err != nil {
+		return info
+	}
+
+	// 保存请求消息内容，用于记录日志
+	switch info.RelayMode {
+	case relayconstant.RelayModeChatCompletions:
+		info.PromptMessages = textRequest.Messages
+	case relayconstant.RelayModeCompletions:
+		info.PromptMessages = textRequest.Prompt
+	}
+
 	return info
 }
 

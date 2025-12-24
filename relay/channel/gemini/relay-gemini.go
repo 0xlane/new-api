@@ -24,6 +24,212 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func extractGeminiInputContent(info *relaycommon.RelayInfo) {
+	if info.Other == nil {
+		info.Other = make(map[string]interface{})
+	}
+
+	// 尝试断言为 Gemini 格式 []dto.GeminiChatContent
+	if contents, ok := info.PromptMessages.([]dto.GeminiChatContent); ok && len(contents) > 0 {
+		var contextContents []dto.GeminiChatContent
+		var userContent *dto.GeminiChatContent
+		var lastUserIndex = -1
+
+		// 找最后一条 user 消息
+		for i := len(contents) - 1; i >= 0; i-- {
+			if contents[i].Role == "user" {
+				lastUserIndex = i
+				break
+			}
+		}
+
+		// 分离上下文和用户输入
+		for i := range contents {
+			if i == lastUserIndex {
+				userContent = &contents[i]
+			} else {
+				contextContents = append(contextContents, contents[i])
+			}
+		}
+
+		// 保存上下文
+		if len(contextContents) > 0 {
+			info.Other["context"] = contextContents
+		}
+
+		// 保存用户输入
+		if userContent != nil {
+			// 提取用户消息的文本内容
+			var textParts []string
+			for _, part := range userContent.Parts {
+				if part.Text != "" {
+					textParts = append(textParts, part.Text)
+				}
+			}
+			if len(textParts) > 0 {
+				info.Other["input_content"] = strings.Join(textParts, "\n")
+			} else {
+				info.Other["input_content"] = userContent
+			}
+		} else if len(contents) > 0 {
+			// 没有找到 user 消息，保存最后一条
+			lastContent := contents[len(contents)-1]
+			var textParts []string
+			for _, part := range lastContent.Parts {
+				if part.Text != "" {
+					textParts = append(textParts, part.Text)
+				}
+			}
+			if len(textParts) > 0 {
+				info.Other["input_content"] = strings.Join(textParts, "\n")
+			} else {
+				info.Other["input_content"] = lastContent
+			}
+		}
+	} else {
+		// 备用方案，直接保存原始内容
+		info.Other["input_content"] = info.PromptMessages
+	}
+}
+
+func extractGeminiOutputContent(info *relaycommon.RelayInfo, response *dto.GeminiChatResponse) {
+	if info.Other == nil {
+		info.Other = make(map[string]interface{})
+	}
+
+	if response == nil || len(response.Candidates) == 0 {
+		return
+	}
+
+	var outputTexts []string
+	var thinkingTexts []string
+	var functionCalls []interface{}
+	var safetyRatings []interface{}
+	var codeExecutions []interface{}
+	var multimodalSummary = map[string]interface{}{
+		"image_count": 0,
+		"audio_count": 0,
+		"file_count":  0,
+	}
+
+	for _, candidate := range response.Candidates {
+		if len(candidate.SafetyRatings) > 0 {
+			for _, rating := range candidate.SafetyRatings {
+				safetyRatings = append(safetyRatings, map[string]interface{}{
+					"category":    rating.Category,
+					"probability": rating.Probability,
+				})
+			}
+		}
+
+		for _, part := range candidate.Content.Parts {
+			if part.FunctionCall != nil {
+				functionCalls = append(functionCalls, map[string]interface{}{
+					"name":      part.FunctionCall.FunctionName,
+					"arguments": part.FunctionCall.Arguments,
+				})
+			} else if part.FunctionResponse != nil {
+				functionCalls = append(functionCalls, map[string]interface{}{
+					"type":     "response",
+					"name":     part.FunctionResponse.Name,
+					"response": part.FunctionResponse.Response,
+				})
+			} else if part.Thought {
+				thinkingTexts = append(thinkingTexts, part.Text)
+			} else if part.ExecutableCode != nil {
+				codeExecutions = append(codeExecutions, map[string]interface{}{
+					"type":     "code",
+					"language": part.ExecutableCode.Language,
+					"code":     part.ExecutableCode.Code,
+				})
+			} else if part.CodeExecutionResult != nil {
+				codeExecutions = append(codeExecutions, map[string]interface{}{
+					"type":    "result",
+					"outcome": part.CodeExecutionResult.Outcome,
+					"output":  part.CodeExecutionResult.Output,
+				})
+			} else if part.InlineData != nil {
+				if strings.HasPrefix(part.InlineData.MimeType, "image") {
+					multimodalSummary["image_count"] = multimodalSummary["image_count"].(int) + 1
+				} else if strings.HasPrefix(part.InlineData.MimeType, "audio") {
+					multimodalSummary["audio_count"] = multimodalSummary["audio_count"].(int) + 1
+				} else {
+					multimodalSummary["file_count"] = multimodalSummary["file_count"].(int) + 1
+				}
+			} else if part.Text != "" && part.Text != "\n" {
+				outputTexts = append(outputTexts, part.Text)
+			}
+		}
+
+		if candidate.FinishReason != nil {
+			info.Other["finish_reason"] = *candidate.FinishReason
+		}
+	}
+
+	info.Other["output_content"] = strings.Join(outputTexts, "\n")
+
+	if len(thinkingTexts) > 0 {
+		info.Other["thinking_content"] = strings.Join(thinkingTexts, "\n")
+	}
+
+	if len(functionCalls) > 0 {
+		info.Other["function_calls"] = functionCalls
+	}
+
+	if len(safetyRatings) > 0 {
+		info.Other["safety_ratings"] = safetyRatings
+	}
+
+	if len(codeExecutions) > 0 {
+		info.Other["code_execution"] = codeExecutions
+	}
+
+	totalMultimodal := multimodalSummary["image_count"].(int) + multimodalSummary["audio_count"].(int) + multimodalSummary["file_count"].(int)
+	if totalMultimodal > 0 {
+		multimodalSummary["has_multimodal"] = true
+		info.Other["multimodal_summary"] = multimodalSummary
+	}
+
+	if response.UsageMetadata.TotalTokenCount > 0 {
+		info.Other["usage_metadata"] = map[string]interface{}{
+			"prompt_tokens":     response.UsageMetadata.PromptTokenCount,
+			"candidates_tokens": response.UsageMetadata.CandidatesTokenCount,
+			"total_tokens":      response.UsageMetadata.TotalTokenCount,
+			"thoughts_tokens":   response.UsageMetadata.ThoughtsTokenCount,
+		}
+	}
+}
+
+func extractGeminiStreamContent(info *relaycommon.RelayInfo, accumulatedContent string, accumulatedThinking string, accumulatedFunctionCalls []interface{}, accumulatedSafetyRatings []interface{}, accumulatedCodeExecutions []interface{}, multimodalSummary map[string]interface{}) {
+	if info.Other == nil {
+		info.Other = make(map[string]interface{})
+	}
+
+	info.Other["output_content"] = accumulatedContent
+
+	if accumulatedThinking != "" {
+		info.Other["thinking_content"] = accumulatedThinking
+	}
+
+	if len(accumulatedFunctionCalls) > 0 {
+		info.Other["function_calls"] = accumulatedFunctionCalls
+	}
+
+	if len(accumulatedSafetyRatings) > 0 {
+		info.Other["safety_ratings"] = accumulatedSafetyRatings
+	}
+
+	if len(accumulatedCodeExecutions) > 0 {
+		info.Other["code_execution"] = accumulatedCodeExecutions
+	}
+
+	totalMultimodal := multimodalSummary["image_count"].(int) + multimodalSummary["audio_count"].(int) + multimodalSummary["file_count"].(int)
+	if totalMultimodal > 0 {
+		multimodalSummary["has_multimodal"] = true
+		info.Other["multimodal_summary"] = multimodalSummary
+	}
+}
+
 // https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=zh-cn#blob
 var geminiSupportedMimeTypes = map[string]bool{
 	"application/pdf": true,
@@ -1139,11 +1345,74 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 }
 
 func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	extractGeminiInputContent(info)
+
+	var accumulatedContent strings.Builder
+	var accumulatedThinking strings.Builder
+	var accumulatedFunctionCalls []interface{}
+	var accumulatedSafetyRatings []interface{}
+	var accumulatedCodeExecutions []interface{}
+	var multimodalSummary = map[string]interface{}{
+		"image_count": 0,
+		"audio_count": 0,
+		"file_count":  0,
+	}
+	
 	id := helper.GetResponseID(c)
 	createAt := common.GetTimestamp()
 	finishReason := constant.FinishReasonStop
 
 	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
+		for _, candidate := range geminiResponse.Candidates {
+			if len(candidate.SafetyRatings) > 0 {
+				for _, rating := range candidate.SafetyRatings {
+					accumulatedSafetyRatings = append(accumulatedSafetyRatings, map[string]interface{}{
+						"category":    rating.Category,
+						"probability": rating.Probability,
+					})
+				}
+			}
+
+			for _, part := range candidate.Content.Parts {
+				if part.FunctionCall != nil {
+					accumulatedFunctionCalls = append(accumulatedFunctionCalls, map[string]interface{}{
+						"name":      part.FunctionCall.FunctionName,
+						"arguments": part.FunctionCall.Arguments,
+					})
+				} else if part.FunctionResponse != nil {
+					accumulatedFunctionCalls = append(accumulatedFunctionCalls, map[string]interface{}{
+						"type":     "response",
+						"name":     part.FunctionResponse.Name,
+						"response": part.FunctionResponse.Response,
+					})
+				} else if part.Thought {
+					accumulatedThinking.WriteString(part.Text)
+				} else if part.ExecutableCode != nil {
+					accumulatedCodeExecutions = append(accumulatedCodeExecutions, map[string]interface{}{
+						"type":     "code",
+						"language": part.ExecutableCode.Language,
+						"code":     part.ExecutableCode.Code,
+					})
+				} else if part.CodeExecutionResult != nil {
+					accumulatedCodeExecutions = append(accumulatedCodeExecutions, map[string]interface{}{
+						"type":    "result",
+						"outcome": part.CodeExecutionResult.Outcome,
+						"output":  part.CodeExecutionResult.Output,
+					})
+				} else if part.InlineData != nil {
+					if strings.HasPrefix(part.InlineData.MimeType, "image") {
+						multimodalSummary["image_count"] = multimodalSummary["image_count"].(int) + 1
+					} else if strings.HasPrefix(part.InlineData.MimeType, "audio") {
+						multimodalSummary["audio_count"] = multimodalSummary["audio_count"].(int) + 1
+					} else {
+						multimodalSummary["file_count"] = multimodalSummary["file_count"].(int) + 1
+					}
+				} else if part.Text != "" && part.Text != "\n" {
+					accumulatedContent.WriteString(part.Text)
+				}
+			}
+		}
+
 		response, isStop := streamResponseGeminiChat2OpenAI(geminiResponse)
 
 		response.Id = id
@@ -1196,6 +1465,8 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 		return usage, err
 	}
 
+	extractGeminiStreamContent(info, accumulatedContent.String(), accumulatedThinking.String(), accumulatedFunctionCalls, accumulatedSafetyRatings, accumulatedCodeExecutions, multimodalSummary)
+
 	response := helper.GenerateFinalUsageResponse(id, createAt, info.UpstreamModelName, *usage)
 	handleErr := handleFinalStream(c, info, response)
 	if handleErr != nil {
@@ -1205,6 +1476,8 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 }
 
 func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	extractGeminiInputContent(info)
+
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
@@ -1226,6 +1499,9 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		//	return nil, types.NewOpenAIError(errors.New("empty response from Gemini API"), types.ErrorCodeEmptyResponse, http.StatusInternalServerError)
 		//}
 	}
+
+	extractGeminiOutputContent(info, &geminiResponse)
+
 	fullTextResponse := responseGeminiChat2OpenAI(c, &geminiResponse)
 	fullTextResponse.Model = info.UpstreamModelName
 	usage := dto.Usage{

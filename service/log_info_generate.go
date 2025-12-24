@@ -50,6 +50,19 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		other["upstream_model_name"] = relayInfo.UpstreamModelName
 	}
 
+	// 添加输入输出内容
+	if relayInfo.Other != nil && common.LogChatContentEnabled {
+		if inputContent, exists := relayInfo.Other["input_content"]; exists {
+			other["input_content"] = inputContent
+		}
+		if outputContent, exists := relayInfo.Other["output_content"]; exists {
+			other["output_content"] = outputContent
+		}
+		if context, exists := relayInfo.Other["context"]; exists {
+			other["context"] = context
+		}
+	}
+
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)
 	if isSystemPromptOverwritten {
 		other["is_system_prompt_overwritten"] = true

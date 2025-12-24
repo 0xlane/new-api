@@ -181,6 +181,80 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		logger.LogError(c, "error processing tokens: "+err.Error())
 	}
 
+	responseText := responseTextBuilder.String()
+	// 保存到 info 中，供日志记录使用
+	if info.Other == nil {
+		info.Other = make(map[string]interface{})
+	}
+
+	// 提取输入内容（最后一条用户消息）和上下文（其他所有非system消息）
+	if messages, ok := info.PromptMessages.([]dto.Message); ok && len(messages) > 0 {
+		var systemPrompt string
+		var contextMessages []dto.Message
+		var userMessage *dto.Message
+		var lastUserMessageIndex = -1
+
+		// 先找出最后一条user消息的索引
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				lastUserMessageIndex = i
+				break
+			}
+		}
+
+		// 再遍历处理所有消息
+		for i := range messages {
+			msg := &messages[i]
+			if msg.Role == "system" {
+				// 如果是system消息，保存其内容
+				content := msg.StringContent()
+				if content != "" {
+					if systemPrompt == "" {
+						systemPrompt = content
+					} else {
+						systemPrompt += "\n" + content
+					}
+				}
+			} else if i == lastUserMessageIndex {
+				// 如果是最后一条user消息
+				userMessage = msg
+			} else {
+				// 其他非system消息作为上下文
+				contextMessages = append(contextMessages, *msg)
+			}
+		}
+
+		// 保存处理后的数据
+		if systemPrompt != "" {
+			info.Other["system_prompt"] = systemPrompt
+		}
+		if len(contextMessages) > 0 {
+			info.Other["context"] = contextMessages
+		}
+		if userMessage != nil {
+			// 提取用户消息的文本内容
+			content := userMessage.StringContent()
+			if content != "" {
+				info.Other["input_content"] = content
+			} else {
+				info.Other["input_content"] = userMessage
+			}
+		} else if len(messages) > 0 {
+			// 如果没有找到user消息，保存最后一条消息作为输入
+			lastMsg := &messages[len(messages)-1]
+			content := lastMsg.StringContent()
+			if content != "" {
+				info.Other["input_content"] = content
+			} else {
+				info.Other["input_content"] = lastMsg
+			}
+		}
+	} else {
+		info.Other["input_content"] = info.PromptMessages // 备用方案，保存全部输入内容
+	}
+
+	info.Other["output_content"] = responseText // 保存输出内容
+
 	if !containStreamUsage {
 		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		usage.CompletionTokens += toolCount * 7
