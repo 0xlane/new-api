@@ -117,14 +117,6 @@ jobs:
           NOTES="${NOTES//$'\r'/'%0D'}"
           echo "notes=$NOTES" >> $GITHUB_OUTPUT
 
-      - name: Ensure label exists
-        if: steps.check_tag.outputs.should_sync == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # 尝试创建标签，如果已存在则忽略错误
-          gh label create "upstream-sync" --description "Automated sync from upstream" --color "0366d6" 2>/dev/null || true
-
       - name: Create Pull Request
         if: steps.check_tag.outputs.should_sync == 'true'
         env:
@@ -175,7 +167,6 @@ jobs:
           " \
             --base main \
             --head "$BRANCH_NAME" \
-            --label "upstream-sync"
 
       - name: Summary
         if: always()
