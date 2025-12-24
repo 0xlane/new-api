@@ -19,7 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '@douyinfe/semi-ui';
+import { Modal, Typography } from '@douyinfe/semi-ui';
+
+const { Paragraph } = Typography;
 import {
   API,
   getTodayStartTimestamp,
