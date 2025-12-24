@@ -116,8 +116,8 @@ type RelayInfo struct {
 	FinalPreConsumedQuota  int  // 最终预消耗的配额
 	IsClaudeBetaQuery      bool // /v1/messages?beta=true
 
-	PromptMessages         interface{}            // 保存请求的消息内容
-	Other                  map[string]interface{} // 用于存储额外信息，如输入输出内容
+	PromptMessages interface{}            // 保存请求的消息内容
+	Other          map[string]interface{} // 用于存储额外信息，如输入输出内容
 
 	PriceData types.PriceData
 
@@ -357,14 +357,6 @@ func GenRelayInfoGemini(c *gin.Context, request dto.Request) *RelayInfo {
 	info.RelayFormat = types.RelayFormatGemini
 	info.ShouldIncludeUsage = false
 
-	geminiRequest := &dto.GeminiChatRequest{}
-	if err := common.UnmarshalBodyReusable(c, geminiRequest); err != nil {
-		return info
-	}
-
-	// 保存请求消息内容，用于记录日志
-	info.PromptMessages = geminiRequest.Contents
-
 	return info
 }
 
@@ -377,20 +369,6 @@ func GenRelayInfoImage(c *gin.Context, request dto.Request) *RelayInfo {
 func GenRelayInfoOpenAI(c *gin.Context, request dto.Request) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
 	info.RelayFormat = types.RelayFormatOpenAI
-
-	textRequest := &dto.GeneralOpenAIRequest{}
-	if err := common.UnmarshalBodyReusable(c, textRequest); err != nil {
-		return info
-	}
-
-	// 保存请求消息内容，用于记录日志
-	switch info.RelayMode {
-	case relayconstant.RelayModeChatCompletions:
-		info.PromptMessages = textRequest.Messages
-	case relayconstant.RelayModeCompletions:
-		info.PromptMessages = textRequest.Prompt
-	}
-
 	return info
 }
 
@@ -465,6 +443,222 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	userSetting, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting)
 	if ok {
 		info.UserSetting = userSetting
+	}
+
+	// 保存请求消息内容，用于记录日志
+	switch info.Request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		switch info.RelayMode {
+		case relayconstant.RelayModeChatCompletions:
+			info.PromptMessages = info.Request.(*dto.GeneralOpenAIRequest).Messages
+		case relayconstant.RelayModeCompletions:
+			info.PromptMessages = info.Request.(*dto.GeneralOpenAIRequest).Prompt
+		}
+	case *dto.OpenAIResponsesRequest:
+		info.PromptMessages = info.Request.(*dto.OpenAIResponsesRequest).ParseInput()
+	case *dto.GeminiChatRequest:
+		info.PromptMessages = info.Request.(*dto.GeminiChatRequest).Contents
+	case *dto.ClaudeRequest:
+		info.PromptMessages = info.Request.(*dto.ClaudeRequest).Messages
+	default:
+		info.PromptMessages = info.Request
+	}
+
+	if info.Other == nil {
+		info.Other = make(map[string]interface{})
+	}
+
+	if messages, ok := info.PromptMessages.([]dto.Message); ok && len(messages) > 0 {
+		var systemPrompt string
+		var contextMessages []dto.Message
+		var userMessage *dto.Message
+		var lastUserMessageIndex = -1
+
+		// 先找出最后一条user消息的索引
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				lastUserMessageIndex = i
+				break
+			}
+		}
+
+		// 再遍历处理所有消息
+		for i := range messages {
+			msg := &messages[i]
+			if msg.Role == "system" {
+				// 如果是system消息，保存其内容
+				content := msg.StringContent()
+				if content != "" {
+					if systemPrompt == "" {
+						systemPrompt = content
+					} else {
+						systemPrompt += "\n" + content
+					}
+				}
+			} else if i == lastUserMessageIndex {
+				// 如果是最后一条user消息
+				userMessage = msg
+			} else {
+				// 其他非system消息作为上下文
+				contextMessages = append(contextMessages, *msg)
+			}
+		}
+
+		// 保存处理后的数据
+		if systemPrompt != "" {
+			info.Other["system_prompt"] = systemPrompt
+		}
+		if len(contextMessages) > 0 {
+			info.Other["context"] = contextMessages
+		}
+		if userMessage != nil {
+			// 提取用户消息的文本内容
+			content := userMessage.StringContent()
+			if content != "" {
+				info.Other["input_content"] = content
+			} else {
+				info.Other["input_content"] = userMessage
+			}
+		} else if len(messages) > 0 {
+			// 如果没有找到user消息，保存最后一条消息作为输入
+			lastMsg := &messages[len(messages)-1]
+			content := lastMsg.StringContent()
+			if content != "" {
+				info.Other["input_content"] = content
+			} else {
+				info.Other["input_content"] = lastMsg
+			}
+		}
+	} else if contents, ok := info.PromptMessages.([]dto.GeminiChatContent); ok && len(contents) > 0 {
+		var contextContents []dto.GeminiChatContent
+		var userContent *dto.GeminiChatContent
+		var lastUserIndex = -1
+
+		// 找最后一条 user 消息
+		for i := len(contents) - 1; i >= 0; i-- {
+			if contents[i].Role == "user" {
+				lastUserIndex = i
+				break
+			}
+		}
+
+		// 分离上下文和用户输入
+		for i := range contents {
+			if i == lastUserIndex {
+				userContent = &contents[i]
+			} else {
+				contextContents = append(contextContents, contents[i])
+			}
+		}
+
+		// 保存上下文
+		if len(contextContents) > 0 {
+			info.Other["context"] = contextContents
+		}
+
+		// 保存用户输入
+		if userContent != nil {
+			// 提取用户消息的文本内容
+			var textParts []string
+			for _, part := range userContent.Parts {
+				if part.Text != "" {
+					textParts = append(textParts, part.Text)
+				}
+			}
+			if len(textParts) > 0 {
+				info.Other["input_content"] = strings.Join(textParts, "\n")
+			} else {
+				info.Other["input_content"] = userContent
+			}
+		} else if len(contents) > 0 {
+			// 没有找到 user 消息，保存最后一条
+			lastContent := contents[len(contents)-1]
+			var textParts []string
+			for _, part := range lastContent.Parts {
+				if part.Text != "" {
+					textParts = append(textParts, part.Text)
+				}
+			}
+			if len(textParts) > 0 {
+				info.Other["input_content"] = strings.Join(textParts, "\n")
+			} else {
+				info.Other["input_content"] = lastContent
+			}
+		}
+	} else if claudeMessages, ok := info.PromptMessages.([]dto.ClaudeMessage); ok && len(claudeMessages) > 0 {
+		// Claude 消息解析
+		var contextMessages []dto.ClaudeMessage
+		var userMessage *dto.ClaudeMessage
+		var lastUserIndex = -1
+
+		// 找最后一条 user 消息
+		for i := len(claudeMessages) - 1; i >= 0; i-- {
+			if claudeMessages[i].Role == "user" {
+				lastUserIndex = i
+				break
+			}
+		}
+
+		// 分离上下文和用户输入
+		for i := range claudeMessages {
+			if i == lastUserIndex {
+				userMessage = &claudeMessages[i]
+			} else {
+				contextMessages = append(contextMessages, claudeMessages[i])
+			}
+		}
+
+		// 从原始请求中提取 system prompt (Claude 的 system 是单独字段)
+		if claudeReq, ok := info.Request.(*dto.ClaudeRequest); ok && claudeReq.System != nil {
+			switch system := claudeReq.System.(type) {
+			case string:
+				if system != "" {
+					info.Other["system_prompt"] = system
+				}
+			case []any:
+				// Claude system 可以是结构化内容数组
+				var systemParts []string
+				for _, item := range system {
+					if itemMap, ok := item.(map[string]any); ok {
+						if itemMap["type"] == "text" {
+							if text, ok := itemMap["text"].(string); ok {
+								systemParts = append(systemParts, text)
+							}
+						}
+					}
+				}
+				if len(systemParts) > 0 {
+					info.Other["system_prompt"] = strings.Join(systemParts, "\n")
+				}
+			}
+		}
+
+		// 保存上下文
+		if len(contextMessages) > 0 {
+			info.Other["context"] = contextMessages
+		}
+
+		// 保存用户输入
+		if userMessage != nil {
+			// 提取用户消息的文本内容
+			content := userMessage.GetStringContent()
+			if content != "" {
+				info.Other["input_content"] = content
+			} else {
+				info.Other["input_content"] = userMessage
+			}
+		} else if len(claudeMessages) > 0 {
+			// 没有找到 user 消息，保存最后一条
+			lastMsg := &claudeMessages[len(claudeMessages)-1]
+			content := lastMsg.GetStringContent()
+			if content != "" {
+				info.Other["input_content"] = content
+			} else {
+				info.Other["input_content"] = lastMsg
+			}
+		}
+	} else {
+		info.Other["input_content"] = info.PromptMessages // 备用方案，保存全部输入内容
 	}
 
 	return info

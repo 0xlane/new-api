@@ -24,74 +24,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func extractGeminiInputContent(info *relaycommon.RelayInfo) {
-	if info.Other == nil {
-		info.Other = make(map[string]interface{})
-	}
-
-	// 尝试断言为 Gemini 格式 []dto.GeminiChatContent
-	if contents, ok := info.PromptMessages.([]dto.GeminiChatContent); ok && len(contents) > 0 {
-		var contextContents []dto.GeminiChatContent
-		var userContent *dto.GeminiChatContent
-		var lastUserIndex = -1
-
-		// 找最后一条 user 消息
-		for i := len(contents) - 1; i >= 0; i-- {
-			if contents[i].Role == "user" {
-				lastUserIndex = i
-				break
-			}
-		}
-
-		// 分离上下文和用户输入
-		for i := range contents {
-			if i == lastUserIndex {
-				userContent = &contents[i]
-			} else {
-				contextContents = append(contextContents, contents[i])
-			}
-		}
-
-		// 保存上下文
-		if len(contextContents) > 0 {
-			info.Other["context"] = contextContents
-		}
-
-		// 保存用户输入
-		if userContent != nil {
-			// 提取用户消息的文本内容
-			var textParts []string
-			for _, part := range userContent.Parts {
-				if part.Text != "" {
-					textParts = append(textParts, part.Text)
-				}
-			}
-			if len(textParts) > 0 {
-				info.Other["input_content"] = strings.Join(textParts, "\n")
-			} else {
-				info.Other["input_content"] = userContent
-			}
-		} else if len(contents) > 0 {
-			// 没有找到 user 消息，保存最后一条
-			lastContent := contents[len(contents)-1]
-			var textParts []string
-			for _, part := range lastContent.Parts {
-				if part.Text != "" {
-					textParts = append(textParts, part.Text)
-				}
-			}
-			if len(textParts) > 0 {
-				info.Other["input_content"] = strings.Join(textParts, "\n")
-			} else {
-				info.Other["input_content"] = lastContent
-			}
-		}
-	} else {
-		// 备用方案，直接保存原始内容
-		info.Other["input_content"] = info.PromptMessages
-	}
-}
-
 func extractGeminiOutputContent(info *relaycommon.RelayInfo, response *dto.GeminiChatResponse) {
 	if info.Other == nil {
 		info.Other = make(map[string]interface{})
@@ -1345,8 +1277,6 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 }
 
 func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
-	extractGeminiInputContent(info)
-
 	var accumulatedContent strings.Builder
 	var accumulatedThinking strings.Builder
 	var accumulatedFunctionCalls []interface{}
@@ -1357,7 +1287,7 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 		"audio_count": 0,
 		"file_count":  0,
 	}
-	
+
 	id := helper.GetResponseID(c)
 	createAt := common.GetTimestamp()
 	finishReason := constant.FinishReasonStop
@@ -1476,8 +1406,6 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 }
 
 func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
-	extractGeminiInputContent(info)
-
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)

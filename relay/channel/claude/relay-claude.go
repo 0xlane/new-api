@@ -686,6 +686,14 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		}
 	}
 
+	// 保存流式输出内容到 info.Other
+	if info.Other == nil {
+		info.Other = make(map[string]interface{})
+	}
+	if responseText := claudeInfo.ResponseText.String(); responseText != "" {
+		info.Other["output_content"] = responseText
+	}
+
 	if info.RelayFormat == types.RelayFormatClaude {
 		//
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
@@ -761,6 +769,9 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		c.Set("claude_web_search_requests", claudeResponse.Usage.ServerToolUse.WebSearchRequests)
 	}
 
+	// 提取非流式输出内容保存到 info.Other
+	extractClaudeOutputContent(info, &claudeResponse)
+
 	service.IOCopyBytesGracefully(c, httpResp, responseData)
 	return nil
 }
@@ -835,4 +846,33 @@ func mapToolChoice(toolChoice any, parallelToolCalls *bool) *dto.ClaudeToolChoic
 	}
 
 	return claudeToolChoice
+}
+
+// extractClaudeOutputContent 从非流式 Claude 响应中提取输出内容
+func extractClaudeOutputContent(info *relaycommon.RelayInfo, response *dto.ClaudeResponse) {
+	if info.Other == nil {
+		info.Other = make(map[string]interface{})
+	}
+
+	if response == nil {
+		return
+	}
+
+	var outputTexts []string
+
+	// 处理 Content 数组
+	for _, content := range response.Content {
+		if content.Type == "text" && content.Text != nil && *content.Text != "" {
+			outputTexts = append(outputTexts, *content.Text)
+		}
+	}
+
+	// 处理 Completion 字段（旧版 API）
+	if response.Completion != "" {
+		outputTexts = append(outputTexts, response.Completion)
+	}
+
+	if len(outputTexts) > 0 {
+		info.Other["output_content"] = strings.Join(outputTexts, "\n")
+	}
 }

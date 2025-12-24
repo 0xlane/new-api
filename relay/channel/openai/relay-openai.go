@@ -187,72 +187,6 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		info.Other = make(map[string]interface{})
 	}
 
-	// 提取输入内容（最后一条用户消息）和上下文（其他所有非system消息）
-	if messages, ok := info.PromptMessages.([]dto.Message); ok && len(messages) > 0 {
-		var systemPrompt string
-		var contextMessages []dto.Message
-		var userMessage *dto.Message
-		var lastUserMessageIndex = -1
-
-		// 先找出最后一条user消息的索引
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].Role == "user" {
-				lastUserMessageIndex = i
-				break
-			}
-		}
-
-		// 再遍历处理所有消息
-		for i := range messages {
-			msg := &messages[i]
-			if msg.Role == "system" {
-				// 如果是system消息，保存其内容
-				content := msg.StringContent()
-				if content != "" {
-					if systemPrompt == "" {
-						systemPrompt = content
-					} else {
-						systemPrompt += "\n" + content
-					}
-				}
-			} else if i == lastUserMessageIndex {
-				// 如果是最后一条user消息
-				userMessage = msg
-			} else {
-				// 其他非system消息作为上下文
-				contextMessages = append(contextMessages, *msg)
-			}
-		}
-
-		// 保存处理后的数据
-		if systemPrompt != "" {
-			info.Other["system_prompt"] = systemPrompt
-		}
-		if len(contextMessages) > 0 {
-			info.Other["context"] = contextMessages
-		}
-		if userMessage != nil {
-			// 提取用户消息的文本内容
-			content := userMessage.StringContent()
-			if content != "" {
-				info.Other["input_content"] = content
-			} else {
-				info.Other["input_content"] = userMessage
-			}
-		} else if len(messages) > 0 {
-			// 如果没有找到user消息，保存最后一条消息作为输入
-			lastMsg := &messages[len(messages)-1]
-			content := lastMsg.StringContent()
-			if content != "" {
-				info.Other["input_content"] = content
-			} else {
-				info.Other["input_content"] = lastMsg
-			}
-		}
-	} else {
-		info.Other["input_content"] = info.PromptMessages // 备用方案，保存全部输入内容
-	}
-
 	info.Other["output_content"] = responseText // 保存输出内容
 
 	if !containStreamUsage {
@@ -326,6 +260,9 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
+
+	// 提取非流式输出内容保存到 info.Other
+	extractOpenAIOutputContent(info, &simpleResponse)
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
@@ -712,4 +649,42 @@ func extractCachedTokensFromBody(body []byte) (int, bool) {
 		return *payload.Usage.PromptCacheHitTokens, true
 	}
 	return 0, false
+}
+
+// extractOpenAIOutputContent 从非流式 OpenAI 响应中提取输出内容
+func extractOpenAIOutputContent(info *relaycommon.RelayInfo, response *dto.OpenAITextResponse) {
+	if info.Other == nil {
+		info.Other = make(map[string]interface{})
+	}
+
+	if response == nil || len(response.Choices) == 0 {
+		return
+	}
+
+	var outputTexts []string
+	var thinkingTexts []string
+
+	for _, choice := range response.Choices {
+		// 提取主要内容
+		content := choice.Message.StringContent()
+		if content != "" {
+			outputTexts = append(outputTexts, content)
+		}
+
+		// 提取推理内容 (reasoning/thinking)
+		if choice.Message.ReasoningContent != "" {
+			thinkingTexts = append(thinkingTexts, choice.Message.ReasoningContent)
+		}
+		if choice.Message.Reasoning != "" {
+			thinkingTexts = append(thinkingTexts, choice.Message.Reasoning)
+		}
+	}
+
+	if len(outputTexts) > 0 {
+		info.Other["output_content"] = strings.Join(outputTexts, "\n")
+	}
+
+	if len(thinkingTexts) > 0 {
+		info.Other["thinking_content"] = strings.Join(thinkingTexts, "\n")
+	}
 }

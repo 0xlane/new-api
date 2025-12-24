@@ -52,6 +52,9 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 		}
 	}
 
+	// 提取输出内容保存到 info.Other
+	extractGeminiOutputContent(info, &geminiResponse)
+
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	return &usage, nil
