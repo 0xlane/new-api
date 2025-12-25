@@ -617,7 +617,7 @@ export const useLogsData = () => {
                 collapseText: t('收起'),
                 expandText: t('展开'),
               }}
-              style={{ maxWidth: '100%', whiteSpace: 'pre-wrap' }}
+              style={{ maxWidth: '100%', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
             >
               {contextStr}
             </Paragraph>
@@ -641,7 +641,7 @@ export const useLogsData = () => {
                 collapseText: t('收起'),
                 expandText: t('展开'),
               }}
-              style={{ maxWidth: '100%', whiteSpace: 'pre-wrap' }}
+              style={{ maxWidth: '100%', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
             >
               {inputContent}
             </Paragraph>
@@ -662,7 +662,7 @@ export const useLogsData = () => {
                 collapseText: t('收起'),
                 expandText: t('展开'),
               }}
-              style={{ maxWidth: '100%', whiteSpace: 'pre-wrap' }}
+              style={{ maxWidth: '100%', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
             >
               {other.output_content}
             </Paragraph>
