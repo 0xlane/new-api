@@ -469,7 +469,6 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	}
 
 	if messages, ok := info.PromptMessages.([]dto.Message); ok && len(messages) > 0 {
-		var systemPrompt string
 		var contextMessages []dto.Message
 		var userMessage *dto.Message
 		var lastUserMessageIndex = -1
@@ -485,29 +484,16 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		// 再遍历处理所有消息
 		for i := range messages {
 			msg := &messages[i]
-			if msg.Role == "system" {
-				// 如果是system消息，保存其内容
-				content := msg.StringContent()
-				if content != "" {
-					if systemPrompt == "" {
-						systemPrompt = content
-					} else {
-						systemPrompt += "\n" + content
-					}
-				}
-			} else if i == lastUserMessageIndex {
+			if i == lastUserMessageIndex {
 				// 如果是最后一条user消息
 				userMessage = msg
 			} else {
-				// 其他非system消息作为上下文
+				// 其他消息（包括system消息）作为上下文
 				contextMessages = append(contextMessages, *msg)
 			}
 		}
 
 		// 保存处理后的数据
-		if systemPrompt != "" {
-			info.Other["system_prompt"] = systemPrompt
-		}
 		if len(contextMessages) > 0 {
 			info.Other["context"] = contextMessages
 		}
@@ -608,13 +594,12 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 			}
 		}
 
-		// 从原始请求中提取 system prompt (Claude 的 system 是单独字段)
+		// 从原始请求中提取 system prompt (Claude 的 system 是单独字段)，作为 context 的一部分
 		if claudeReq, ok := info.Request.(*dto.ClaudeRequest); ok && claudeReq.System != nil {
+			var systemContent string
 			switch system := claudeReq.System.(type) {
 			case string:
-				if system != "" {
-					info.Other["system_prompt"] = system
-				}
+				systemContent = system
 			case []any:
 				// Claude system 可以是结构化内容数组
 				var systemParts []string
@@ -627,9 +612,12 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 						}
 					}
 				}
-				if len(systemParts) > 0 {
-					info.Other["system_prompt"] = strings.Join(systemParts, "\n")
-				}
+				systemContent = strings.Join(systemParts, "\n")
+			}
+			// 将 system prompt 作为一条 system 消息添加到 context 开头
+			if systemContent != "" {
+				systemMsg := dto.ClaudeMessage{Role: "system", Content: systemContent}
+				contextMessages = append([]dto.ClaudeMessage{systemMsg}, contextMessages...)
 			}
 		}
 
