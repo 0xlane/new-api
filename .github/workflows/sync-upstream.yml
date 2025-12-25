@@ -30,7 +30,8 @@ jobs:
       - name: Add upstream remote
         run: |
           git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
-          git fetch upstream --tags
+          # 不拉取 tags，避免覆盖本地定制版本的 tags
+          git fetch upstream
 
       - name: Get latest upstream release tag
         id: get_release
@@ -50,17 +51,29 @@ jobs:
             exit 0
           fi
           
-          # 检查是否已经包含这个 tag 的提交
-          git fetch upstream tag "$TAG" --no-tags
-          TAG_COMMIT=$(git rev-list -n 1 "$TAG" 2>/dev/null || echo "")
+          # 获取上游 release tag 对应的 commit（明确使用 refs/tags 确保获取上游的 tag）
+          TAG_COMMIT=$(git ls-remote upstream "refs/tags/$TAG" | awk '{print $1}')
+          
+          # 如果是 annotated tag，需要获取实际的 commit
+          if [ -n "$TAG_COMMIT" ]; then
+            # 尝试解引用 annotated tag
+            DEREF_COMMIT=$(git ls-remote upstream "refs/tags/$TAG^{}" | awk '{print $1}')
+            if [ -n "$DEREF_COMMIT" ]; then
+              TAG_COMMIT="$DEREF_COMMIT"
+            fi
+          fi
           
           if [ -z "$TAG_COMMIT" ]; then
-            echo "❌ Could not find tag commit"
+            echo "❌ Could not find tag commit for $TAG"
             echo "should_sync=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
+          echo "📍 Upstream $TAG points to commit: $TAG_COMMIT"
+          echo "tag_commit=$TAG_COMMIT" >> $GITHUB_OUTPUT
+          
           # 检查当前分支是否已经包含这个提交
+          git fetch upstream "$TAG_COMMIT" --depth=1 2>/dev/null || git fetch upstream
           if git merge-base --is-ancestor "$TAG_COMMIT" HEAD 2>/dev/null; then
             echo "✅ Already synced with $TAG"
             echo "should_sync=false" >> $GITHUB_OUTPUT
@@ -74,11 +87,12 @@ jobs:
         id: merge
         run: |
           TAG="${{ steps.get_release.outputs.latest_tag }}"
+          TAG_COMMIT="${{ steps.check_sync.outputs.tag_commit }}"
           
-          echo "🔄 Merging upstream release $TAG..."
+          echo "🔄 Merging upstream release $TAG (commit: $TAG_COMMIT)..."
           
-          # 尝试合并上游 tag
-          if git merge "$TAG" -m "🔄 Sync upstream release $TAG" --no-edit; then
+          # 使用 commit hash 合并，确保合并的是上游的 release 而不是本地同名 tag
+          if git merge "$TAG_COMMIT" -m "🔄 Sync upstream release $TAG" --no-edit; then
             echo "✅ Merge successful (no conflicts)"
             echo "merge_status=success" >> $GITHUB_OUTPUT
           else
@@ -137,8 +151,9 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "请手动执行以下命令解决冲突：" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "git fetch upstream --tags" >> $GITHUB_STEP_SUMMARY
-            echo "git merge $TAG" >> $GITHUB_STEP_SUMMARY
+            echo "git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git" >> $GITHUB_STEP_SUMMARY
+            echo "git fetch upstream" >> $GITHUB_STEP_SUMMARY
+            echo "git merge FETCH_HEAD" >> $GITHUB_STEP_SUMMARY
             echo "# 解决冲突后" >> $GITHUB_STEP_SUMMARY
             echo "git add ." >> $GITHUB_STEP_SUMMARY
             echo "git commit" >> $GITHUB_STEP_SUMMARY
