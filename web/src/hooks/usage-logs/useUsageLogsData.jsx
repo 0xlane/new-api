@@ -309,6 +309,111 @@ export const useLogsData = () => {
   // Format logs data
   const setLogsFormat = (logs) => {
     let expandDatesLocal = {};
+    
+    // 通用消息格式化函数，支持 OpenAI/Claude/Gemini 格式
+    // 可处理: 单个消息、消息数组、字符串
+    const formatMessages = (data, options = {}) => {
+      const { showRole = true, separator = '\n\n' } = options;
+      
+      // 从单个消息提取内容
+      const extractMessageContent = (msg) => {
+        if (typeof msg !== 'object' || msg === null) {
+          return String(msg);
+        }
+        
+        // 标准格式: {role, content} - OpenAI/Claude
+        if (msg.content !== undefined) {
+          if (typeof msg.content === 'string') {
+            return msg.content;
+          }
+          // Claude content 可能是数组格式
+          if (Array.isArray(msg.content)) {
+            return msg.content.map(item => {
+              if (typeof item === 'string') return item;
+              if (item?.text) return item.text;
+              if (item?.type === 'text' && item?.text) return item.text;
+              return JSON.stringify(item);
+            }).join('\n');
+          }
+          return JSON.stringify(msg.content);
+        }
+        
+        // Gemini 格式: {role, parts: [{text, ...}]}
+        if (Array.isArray(msg.parts)) {
+          const textParts = msg.parts
+            .filter(part => part.text)
+            .map(part => part.text);
+          if (textParts.length > 0) {
+            return textParts.join('\n');
+          }
+          // 如果没有 text，检查其他类型
+          const otherParts = msg.parts
+            .filter(part => !part.text)
+            .map(part => {
+              if (part.inlineData) return '[内联数据]';
+              if (part.fileData) return '[文件数据]';
+              if (part.functionCall) return `[函数调用: ${part.functionCall.name || '未知'}]`;
+              if (part.functionResponse) return '[函数响应]';
+              return JSON.stringify(part);
+            });
+          return otherParts.join('\n') || JSON.stringify(msg.parts);
+        }
+        
+        // 其他未知格式
+        return JSON.stringify(msg, null, 2);
+      };
+      
+      // 角色显示名称映射
+      const getRoleDisplay = (role) => {
+        switch(role) {
+          case 'user': return '用户';
+          case 'assistant': return '助手';
+          case 'system': return '系统';
+          case 'model': return '模型'; // Gemini 使用 model 表示助手
+          case 'function': return '函数';
+          case 'tool': return '工具';
+          default: return role || '未知';
+        }
+      };
+      
+      // 格式化单条消息
+      const formatSingleMessage = (msg) => {
+        if (typeof msg === 'object' && msg !== null && msg.role) {
+          const content = extractMessageContent(msg);
+          if (showRole) {
+            const roleDisplay = getRoleDisplay(msg.role);
+            return `${roleDisplay}消息: ${content}`;
+          }
+          return content;
+        }
+        return JSON.stringify(msg, null, 2);
+      };
+      
+      // 主逻辑
+      if (!data) return "";
+      
+      // 字符串直接返回
+      if (typeof data === 'string') {
+        return data;
+      }
+      
+      // 数组：格式化每条消息
+      if (Array.isArray(data)) {
+        if (data.length === 0) {
+          return "空上下文";
+        }
+        return data.map(formatSingleMessage).join(separator);
+      }
+      
+      // 单个对象：当作单条消息处理
+      if (typeof data === 'object') {
+        return formatSingleMessage(data);
+      }
+      
+      // 其他类型
+      return JSON.stringify(data, null, 2);
+    };
+    
     for (let i = 0; i < logs.length; i++) {
       logs[i].timestamp2string = timestamp2string(logs[i].created_at);
       logs[i].key = logs[i].id;
@@ -499,42 +604,7 @@ export const useLogsData = () => {
 
       // 添加上下文信息（如果有）
       if (other?.context) {
-        let contextStr = "";
-        
-        if (Array.isArray(other.context)) {
-          // 如果是消息数组，格式化显示每条消息
-          if (other.context.length > 0) {
-            contextStr = other.context.map(msg => {
-              if (typeof msg === 'object' && msg !== null && msg.role && msg.content) {
-                // 根据角色格式化消息
-                let roleDisplay = '未知';
-                switch(msg.role) {
-                  case 'user':
-                    roleDisplay = '用户';
-                    break;
-                  case 'assistant':
-                    roleDisplay = '助手';
-                    break;
-                  case 'system':
-                    roleDisplay = '系统';
-                    break;
-                  default:
-                    roleDisplay = msg.role;
-                }
-                return `${roleDisplay}消息: ${msg.content}`;
-              } else {
-                // 无法解析的对象
-                return JSON.stringify(msg, null, 2);
-              }
-            }).join('\n\n'); // 使用双换行分隔不同消息，提高可读性
-          } else {
-            contextStr = "空上下文";
-          }
-        } else if (typeof other.context === 'string') {
-          contextStr = other.context;
-        } else {
-          contextStr = JSON.stringify(other.context, null, 2);
-        }
+        const contextStr = formatMessages(other.context);
         
         expandDataLocal.push({
           key: t('上下文'),
@@ -557,25 +627,8 @@ export const useLogsData = () => {
 
       // 添加输入内容
       if (other?.input_content) {
-        // 格式化用户输入消息
-        let inputContent = "";
-        if (typeof other.input_content === 'object' && other.input_content !== null) {
-          if (other.input_content.role === 'user' && other.input_content.content) {
-            // 用户消息格式化显示
-            inputContent = `用户消息: ${other.input_content.content}`;
-          } else if (other.input_content.content) {
-            // 其他角色但有content
-            const role = other.input_content.role || '未知';
-            inputContent = `${role}消息: ${other.input_content.content}`;
-          } else {
-            // 无法解析的对象
-            inputContent = JSON.stringify(other.input_content, null, 2);
-          }
-        } else if (typeof other.input_content === 'string') {
-          inputContent = other.input_content;
-        } else {
-          inputContent = JSON.stringify(other.input_content, null, 2);
-        }
+        // 使用通用格式化函数，支持所有消息格式
+        const inputContent = formatMessages(other.input_content);
         
         expandDataLocal.push({
           key: t('模型输入'),
