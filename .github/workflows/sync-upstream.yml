@@ -31,7 +31,7 @@ jobs:
         run: |
           git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
           # 不拉取 tags，避免覆盖本地定制版本的 tags
-          git fetch upstream
+          git fetch upstream --no-tags
 
       - name: Get latest upstream release tag
         id: get_release
@@ -92,7 +92,7 @@ jobs:
           echo "🔄 Merging upstream release $TAG (commit: $TAG_COMMIT)..."
           
           # 使用 commit hash 合并，确保合并的是上游的 release 而不是本地同名 tag
-          if git merge "$TAG_COMMIT" -m "🔄 Sync upstream release $TAG" --no-edit; then
+          if git merge "$TAG_COMMIT" -m "🔄 Sync upstream release $TAG" --no-edit --allow-unrelated-histories; then
             echo "✅ Merge successful (no conflicts)"
             echo "merge_status=success" >> $GITHUB_OUTPUT
           else
@@ -152,12 +152,13 @@ jobs:
             echo "请手动执行以下命令解决冲突：" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
             echo "git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git" >> $GITHUB_STEP_SUMMARY
-            echo "git fetch upstream" >> $GITHUB_STEP_SUMMARY
-            echo "git merge FETCH_HEAD" >> $GITHUB_STEP_SUMMARY
+            echo "git fetch upstream --no-tags" >> $GITHUB_STEP_SUMMARY
+            echo "# 合并指定的 release tag: $TAG (commit: $TAG_COMMIT)" >> $GITHUB_STEP_SUMMARY
+            echo "git merge $TAG_COMMIT -m '🔄 Sync upstream release $TAG' --allow-unrelated-histories" >> $GITHUB_STEP_SUMMARY
             echo "# 解决冲突后" >> $GITHUB_STEP_SUMMARY
             echo "git add ." >> $GITHUB_STEP_SUMMARY
             echo "git commit" >> $GITHUB_STEP_SUMMARY
-            echo "git push" >> $GITHUB_STEP_SUMMARY
+            echo "git push origin main" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **状态:** 同步失败" >> $GITHUB_STEP_SUMMARY
