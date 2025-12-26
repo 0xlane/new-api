@@ -132,6 +132,7 @@ jobs:
         if: always()
         run: |
           TAG="${{ steps.get_release.outputs.latest_tag }}"
+          TAG_COMMIT="${{ steps.check_sync.outputs.tag_commit }}"
           SHOULD_SYNC="${{ steps.check_sync.outputs.should_sync }}"
           MERGE_STATUS="${{ steps.merge.outputs.merge_status }}"
           
