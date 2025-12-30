@@ -24,4 +24,5 @@ electron/node_modules
 electron/dist
 data/
 .gomodcache/
-.serena
+.gocache-temp
+.gopath
