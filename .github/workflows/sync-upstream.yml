@@ -71,9 +71,8 @@ jobs:
           
           echo "📍 Upstream $TAG points to commit: $TAG_COMMIT"
           echo "tag_commit=$TAG_COMMIT" >> $GITHUB_OUTPUT
-          
+
           # 检查当前分支是否已经包含这个提交
-          git fetch upstream "$TAG_COMMIT" --depth=1 2>/dev/null || git fetch upstream
           if git merge-base --is-ancestor "$TAG_COMMIT" HEAD 2>/dev/null; then
             echo "✅ Already synced with $TAG"
             echo "should_sync=false" >> $GITHUB_OUTPUT
