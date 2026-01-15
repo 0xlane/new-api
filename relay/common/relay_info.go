@@ -115,6 +115,7 @@ type RelayInfo struct {
 	SendResponseCount      int
 	FinalPreConsumedQuota  int  // 最终预消耗的配额
 	IsClaudeBetaQuery      bool // /v1/messages?beta=true
+	IsChannelTest          bool // channel test request
 
 	PromptMessages interface{}            // 保存请求的消息内容
 	Other          map[string]interface{} // 用于存储额外信息，如输入输出内容
