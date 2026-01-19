@@ -434,13 +434,13 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel)
 			// 返回 EmbeddingRequest
 			return &dto.EmbeddingRequest{
 				Model: model,
-				Input: []any{"hello world"},
+				Input: []any{"who are you"},
 			}
 		case constant.EndpointTypeImageGeneration:
 			// 返回 ImageRequest
 			return &dto.ImageRequest{
 				Model:  model,
-				Prompt: "a cute cat",
+				Prompt: "a blue bird",
 				N:      1,
 				Size:   "1024x1024",
 			}
@@ -456,7 +456,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel)
 			// 返回 OpenAIResponsesRequest
 			return &dto.OpenAIResponsesRequest{
 				Model: model,
-				Input: json.RawMessage("\"hi\""),
+				Input: json.RawMessage("\"what model are you?\""),
 			}
 		case constant.EndpointTypeAnthropic, constant.EndpointTypeGemini, constant.EndpointTypeOpenAI:
 			// 返回 GeneralOpenAIRequest
@@ -470,7 +470,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel)
 				Messages: []dto.Message{
 					{
 						Role:    "user",
-						Content: "hi",
+						Content: "what model are you?",
 					},
 				},
 				MaxTokens: maxTokens,
