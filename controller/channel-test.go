@@ -494,7 +494,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel)
 	if strings.Contains(strings.ToLower(model), "codex") {
 		return &dto.OpenAIResponsesRequest{
 			Model: model,
-			Input: json.RawMessage("\"hi\""),
+			Input: json.RawMessage("\"what model are you?\""),
 		}
 	}
 
@@ -505,7 +505,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel)
 		Messages: []dto.Message{
 			{
 				Role:    "user",
-				Content: "hi",
+				Content: "what model are you?",
 			},
 		},
 	}
