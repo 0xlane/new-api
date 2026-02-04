@@ -474,7 +474,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string) 
 }
 
 func buildTestRequest(model string, endpointType string, channel *model.Channel) dto.Request {
-	testResponsesInput := json.RawMessage(`[{"role":"user","content":"hi"}]`)
+	testResponsesInput := json.RawMessage(`[{"role":"user","content":"what model are you?"}]`)
 
 	// 根据端点类型构建不同的测试请求
 	if endpointType != "" {
@@ -505,7 +505,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel)
 			// 返回 OpenAIResponsesRequest
 			return &dto.OpenAIResponsesRequest{
 				Model: model,
-				Input: json.RawMessage(`[{"role":"user","content":"hi"}]`),
+				Input: json.RawMessage(`[{"role":"user","content":"what model are you?"}]`),
 			}
 		case constant.EndpointTypeOpenAIResponseCompact:
 			// 返回 OpenAIResponsesCompactionRequest
@@ -566,7 +566,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel)
 	if strings.Contains(strings.ToLower(model), "codex") {
 		return &dto.OpenAIResponsesRequest{
 			Model: model,
-			Input: json.RawMessage(`[{"role":"user","content":"hi"}]`),
+			Input: json.RawMessage(`[{"role":"user","content":"what model are you?"}]`),
 		}
 	}
 
