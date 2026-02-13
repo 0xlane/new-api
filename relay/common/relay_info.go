@@ -488,6 +488,9 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.UserSetting = userSetting
 	}
 
+	// 初始化 Other map，防止后续写入时 panic（assignment to entry in nil map）
+	info.Other = make(map[string]interface{})
+
 	// 保存请求客户端UA
 	userAgent := c.GetHeader("User-Agent")
 	if userAgent != "" {
@@ -517,10 +520,6 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.PromptMessages = info.Request.(*dto.ClaudeRequest).Messages
 	default:
 		info.PromptMessages = info.Request
-	}
-
-	if info.Other == nil {
-		info.Other = make(map[string]interface{})
 	}
 
 	if messages, ok := info.PromptMessages.([]dto.Message); ok && len(messages) > 0 {
