@@ -50,16 +50,25 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		other["upstream_model_name"] = relayInfo.UpstreamModelName
 	}
 
-	// 添加输入输出内容
-	if relayInfo.Other != nil && common.LogChatContentEnabled {
-		if inputContent, exists := relayInfo.Other["input_content"]; exists {
-			other["input_content"] = inputContent
+	// 添加额外内容记录
+	if relayInfo.Other != nil {
+		if userAgent, exists := relayInfo.Other["user_agent"]; exists {
+			other["user_agent"] = userAgent
 		}
-		if outputContent, exists := relayInfo.Other["output_content"]; exists {
-			other["output_content"] = outputContent
+		if anthropicBeta, exists := relayInfo.Other["anthropic_beta"]; exists {
+			other["anthropic_beta"] = anthropicBeta
 		}
-		if context, exists := relayInfo.Other["context"]; exists {
-			other["context"] = context
+		// 模型输入输出记录
+		if common.LogChatContentEnabled {
+			if inputContent, exists := relayInfo.Other["input_content"]; exists {
+				other["input_content"] = inputContent
+			}
+			if outputContent, exists := relayInfo.Other["output_content"]; exists {
+				other["output_content"] = outputContent
+			}
+			if context, exists := relayInfo.Other["context"]; exists {
+				other["context"] = context
+			}
 		}
 	}
 
