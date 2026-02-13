@@ -1380,6 +1380,17 @@ func handleFinalStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.Ch
 }
 
 func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, callback func(data string, geminiResponse *dto.GeminiChatResponse) bool) (*dto.Usage, *types.NewAPIError) {
+	var accumulatedContent strings.Builder
+	var accumulatedThinking strings.Builder
+	var accumulatedFunctionCalls []interface{}
+	var accumulatedSafetyRatings []interface{}
+	var accumulatedCodeExecutions []interface{}
+	var multimodalSummary = map[string]interface{}{
+		"image_count": 0,
+		"audio_count": 0,
+		"file_count":  0,
+	}
+	
 	var usage = &dto.Usage{}
 	var imageCount int
 	responseText := strings.Builder{}
@@ -1424,50 +1435,6 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			}
 		}
 
-		return callback(data, &geminiResponse)
-	})
-
-	if imageCount != 0 {
-		if usage.CompletionTokens == 0 {
-			usage.CompletionTokens = imageCount * 1400
-		}
-	}
-
-	usage.PromptTokensDetails.TextTokens = usage.PromptTokens
-	if usage.TotalTokens > 0 {
-		usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
-	}
-
-	if usage.CompletionTokens <= 0 {
-		if info.ReceivedResponseCount > 0 {
-			usage = service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		} else {
-			usage = &dto.Usage{}
-		}
-	}
-
-	return usage, nil
-}
-
-func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
-	var accumulatedContent strings.Builder
-	var accumulatedThinking strings.Builder
-	var accumulatedFunctionCalls []interface{}
-	var accumulatedSafetyRatings []interface{}
-	var accumulatedCodeExecutions []interface{}
-	var multimodalSummary = map[string]interface{}{
-		"image_count": 0,
-		"audio_count": 0,
-		"file_count":  0,
-	}
-
-	id := helper.GetResponseID(c)
-	createAt := common.GetTimestamp()
-	finishReason := constant.FinishReasonStop
-	toolCallIndexByChoice := make(map[int]map[string]int)
-	nextToolCallIndexByChoice := make(map[int]int)
-
-	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
 		for _, candidate := range geminiResponse.Candidates {
 			if len(candidate.SafetyRatings) > 0 {
 				for _, rating := range candidate.SafetyRatings {
@@ -1518,6 +1485,41 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 			}
 		}
 
+		return callback(data, &geminiResponse)
+	})
+
+	extractGeminiStreamContent(info, accumulatedContent.String(), accumulatedThinking.String(), accumulatedFunctionCalls, accumulatedSafetyRatings, accumulatedCodeExecutions, multimodalSummary)
+
+	if imageCount != 0 {
+		if usage.CompletionTokens == 0 {
+			usage.CompletionTokens = imageCount * 1400
+		}
+	}
+
+	usage.PromptTokensDetails.TextTokens = usage.PromptTokens
+	if usage.TotalTokens > 0 {
+		usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
+	}
+
+	if usage.CompletionTokens <= 0 {
+		if info.ReceivedResponseCount > 0 {
+			usage = service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		} else {
+			usage = &dto.Usage{}
+		}
+	}
+
+	return usage, nil
+}
+
+func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	id := helper.GetResponseID(c)
+	createAt := common.GetTimestamp()
+	finishReason := constant.FinishReasonStop
+	toolCallIndexByChoice := make(map[int]map[string]int)
+	nextToolCallIndexByChoice := make(map[int]int)
+
+	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
 		response, isStop := streamResponseGeminiChat2OpenAI(geminiResponse)
 
 		response.Id = id
@@ -1591,8 +1593,6 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	if err != nil {
 		return usage, err
 	}
-
-	extractGeminiStreamContent(info, accumulatedContent.String(), accumulatedThinking.String(), accumulatedFunctionCalls, accumulatedSafetyRatings, accumulatedCodeExecutions, multimodalSummary)
 
 	response := helper.GenerateFinalUsageResponse(id, createAt, info.UpstreamModelName, *usage)
 	handleErr := handleFinalStream(c, info, response)
