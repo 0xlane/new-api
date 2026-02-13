@@ -716,6 +716,22 @@ export const useLogsData = () => {
         });
       }
 
+      // 添加客户端UA
+      if (other?.user_agent) {
+        expandDataLocal.push({
+          key: t('User Agent'),
+          value: other.user_agent,
+        });
+      }
+
+      // 添加Anthropic-Beta
+      if (other?.anthropic_beta) {
+        expandDataLocal.push({
+          key: t('Anthropic Beta'),
+          value: other.anthropic_beta,
+        });
+      }
+
       // 添加上下文信息（如果有）
       if (other?.context) {
         const contextStr = formatMessages(other.context);

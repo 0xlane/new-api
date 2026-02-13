@@ -488,6 +488,18 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.UserSetting = userSetting
 	}
 
+	// 保存请求客户端UA
+	userAgent := c.GetHeader("User-Agent")
+	if userAgent != "" {
+		info.Other["user_agent"] = userAgent
+	}
+
+	// 保存Anthropic-Beta
+	anthropicBeta := c.GetHeader("Anthropic-Beta")
+	if anthropicBeta != "" {
+		info.Other["anthropic_beta"] = anthropicBeta
+	}
+
 	// 保存请求消息内容，用于记录日志
 	switch info.Request.(type) {
 	case *dto.GeneralOpenAIRequest:
