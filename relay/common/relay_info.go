@@ -101,6 +101,7 @@ type RelayInfo struct {
 	RelayMode              int
 	OriginModelName        string
 	RequestURLPath         string
+	RequestHeaders         map[string]string
 	ShouldIncludeUsage     bool
 	DisablePing            bool // 是否禁止向下游发送自定义 Ping
 	ClientWs               *websocket.Conn
@@ -144,9 +145,11 @@ type RelayInfo struct {
 	SubscriptionAmountUsedAfterPreConsume int64
 	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
 	IsChannelTest                         bool // channel test request
-
-	PromptMessages interface{}            // 保存请求的消息内容
-	Other          map[string]interface{} // 用于存储额外信息，如输入输出内容
+	RetryIndex                            int
+	LastError                             *types.NewAPIError
+	RuntimeHeadersOverride                map[string]interface{}
+	UseRuntimeHeadersOverride             bool
+	ParamOverrideAudit                    []string
 
 	PriceData types.PriceData
 
@@ -335,13 +338,8 @@ func GenRelayInfoClaude(c *gin.Context, request dto.Request) *RelayInfo {
 	info.ClaudeConvertInfo = &ClaudeConvertInfo{
 		LastMessagesType: LastMessageTypeNone,
 	}
-	info.IsClaudeBetaQuery = c.Query("beta") == "true" || isClaudeBetaForced(c)
+	info.IsClaudeBetaQuery = c.Query("beta") == "true"
 	return info
-}
-
-func isClaudeBetaForced(c *gin.Context) bool {
-	channelOtherSettings, ok := common.GetContextKeyType[dto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
-	return ok && channelOtherSettings.ClaudeBetaQuery
 }
 
 func GenRelayInfoRerank(c *gin.Context, request *dto.RerankRequest) *RelayInfo {
@@ -464,6 +462,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		isFirstResponse: true,
 		RelayMode:       relayconstant.Path2RelayMode(c.Request.URL.Path),
 		RequestURLPath:  c.Request.URL.String(),
+		RequestHeaders:  cloneRequestHeaders(c),
 		IsStream:        isStream,
 
 		StartTime:         startTime,
@@ -493,222 +492,28 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.UserSetting = userSetting
 	}
 
-	// 初始化 Other map，防止后续写入时 panic（assignment to entry in nil map）
-	info.Other = make(map[string]interface{})
-
-	// 保存请求客户端UA
-	userAgent := c.GetHeader("User-Agent")
-	if userAgent != "" {
-		info.Other["user_agent"] = userAgent
-	}
-
-	// 保存Anthropic-Beta
-	anthropicBeta := c.GetHeader("Anthropic-Beta")
-	if anthropicBeta != "" {
-		info.Other["anthropic_beta"] = anthropicBeta
-	}
-
-	// 保存请求消息内容，用于记录日志
-	switch info.Request.(type) {
-	case *dto.GeneralOpenAIRequest:
-		switch info.RelayMode {
-		case relayconstant.RelayModeChatCompletions:
-			info.PromptMessages = info.Request.(*dto.GeneralOpenAIRequest).Messages
-		case relayconstant.RelayModeCompletions:
-			info.PromptMessages = info.Request.(*dto.GeneralOpenAIRequest).Prompt
-		}
-	case *dto.OpenAIResponsesRequest:
-		info.PromptMessages = info.Request.(*dto.OpenAIResponsesRequest).ParseInput()
-	case *dto.GeminiChatRequest:
-		info.PromptMessages = info.Request.(*dto.GeminiChatRequest).Contents
-	case *dto.ClaudeRequest:
-		info.PromptMessages = info.Request.(*dto.ClaudeRequest).Messages
-	default:
-		info.PromptMessages = info.Request
-	}
-
-	if messages, ok := info.PromptMessages.([]dto.Message); ok && len(messages) > 0 {
-		var contextMessages []dto.Message
-		var userMessage *dto.Message
-		var lastUserMessageIndex = -1
-
-		// 先找出最后一条user消息的索引
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].Role == "user" {
-				lastUserMessageIndex = i
-				break
-			}
-		}
-
-		// 再遍历处理所有消息
-		for i := range messages {
-			msg := &messages[i]
-			if i == lastUserMessageIndex {
-				// 如果是最后一条user消息
-				userMessage = msg
-			} else {
-				// 其他消息（包括system消息）作为上下文
-				contextMessages = append(contextMessages, *msg)
-			}
-		}
-
-		// 保存处理后的数据
-		if len(contextMessages) > 0 {
-			info.Other["context"] = contextMessages
-		}
-		if userMessage != nil {
-			// 提取用户消息的文本内容
-			content := userMessage.StringContent()
-			if content != "" {
-				info.Other["input_content"] = content
-			} else {
-				info.Other["input_content"] = userMessage
-			}
-		} else if len(messages) > 0 {
-			// 如果没有找到user消息，保存最后一条消息作为输入
-			lastMsg := &messages[len(messages)-1]
-			content := lastMsg.StringContent()
-			if content != "" {
-				info.Other["input_content"] = content
-			} else {
-				info.Other["input_content"] = lastMsg
-			}
-		}
-	} else if contents, ok := info.PromptMessages.([]dto.GeminiChatContent); ok && len(contents) > 0 {
-		var contextContents []dto.GeminiChatContent
-		var userContent *dto.GeminiChatContent
-		var lastUserIndex = -1
-
-		// 找最后一条 user 消息
-		for i := len(contents) - 1; i >= 0; i-- {
-			if contents[i].Role == "user" {
-				lastUserIndex = i
-				break
-			}
-		}
-
-		// 分离上下文和用户输入
-		for i := range contents {
-			if i == lastUserIndex {
-				userContent = &contents[i]
-			} else {
-				contextContents = append(contextContents, contents[i])
-			}
-		}
-
-		// 保存上下文
-		if len(contextContents) > 0 {
-			info.Other["context"] = contextContents
-		}
-
-		// 保存用户输入
-		if userContent != nil {
-			// 提取用户消息的文本内容
-			var textParts []string
-			for _, part := range userContent.Parts {
-				if part.Text != "" {
-					textParts = append(textParts, part.Text)
-				}
-			}
-			if len(textParts) > 0 {
-				info.Other["input_content"] = strings.Join(textParts, "\n")
-			} else {
-				info.Other["input_content"] = userContent
-			}
-		} else if len(contents) > 0 {
-			// 没有找到 user 消息，保存最后一条
-			lastContent := contents[len(contents)-1]
-			var textParts []string
-			for _, part := range lastContent.Parts {
-				if part.Text != "" {
-					textParts = append(textParts, part.Text)
-				}
-			}
-			if len(textParts) > 0 {
-				info.Other["input_content"] = strings.Join(textParts, "\n")
-			} else {
-				info.Other["input_content"] = lastContent
-			}
-		}
-	} else if claudeMessages, ok := info.PromptMessages.([]dto.ClaudeMessage); ok && len(claudeMessages) > 0 {
-		// Claude 消息解析
-		var contextMessages []dto.ClaudeMessage
-		var userMessage *dto.ClaudeMessage
-		var lastUserIndex = -1
-
-		// 找最后一条 user 消息
-		for i := len(claudeMessages) - 1; i >= 0; i-- {
-			if claudeMessages[i].Role == "user" {
-				lastUserIndex = i
-				break
-			}
-		}
-
-		// 分离上下文和用户输入
-		for i := range claudeMessages {
-			if i == lastUserIndex {
-				userMessage = &claudeMessages[i]
-			} else {
-				contextMessages = append(contextMessages, claudeMessages[i])
-			}
-		}
-
-		// 从原始请求中提取 system prompt (Claude 的 system 是单独字段)，作为 context 的一部分
-		if claudeReq, ok := info.Request.(*dto.ClaudeRequest); ok && claudeReq.System != nil {
-			var systemContent string
-			switch system := claudeReq.System.(type) {
-			case string:
-				systemContent = system
-			case []any:
-				// Claude system 可以是结构化内容数组
-				var systemParts []string
-				for _, item := range system {
-					if itemMap, ok := item.(map[string]any); ok {
-						if itemMap["type"] == "text" {
-							if text, ok := itemMap["text"].(string); ok {
-								systemParts = append(systemParts, text)
-							}
-						}
-					}
-				}
-				systemContent = strings.Join(systemParts, "\n")
-			}
-			// 将 system prompt 作为一条 system 消息添加到 context 开头
-			if systemContent != "" {
-				systemMsg := dto.ClaudeMessage{Role: "system", Content: systemContent}
-				contextMessages = append([]dto.ClaudeMessage{systemMsg}, contextMessages...)
-			}
-		}
-
-		// 保存上下文
-		if len(contextMessages) > 0 {
-			info.Other["context"] = contextMessages
-		}
-
-		// 保存用户输入
-		if userMessage != nil {
-			// 提取用户消息的文本内容
-			content := userMessage.GetStringContent()
-			if content != "" {
-				info.Other["input_content"] = content
-			} else {
-				info.Other["input_content"] = userMessage
-			}
-		} else if len(claudeMessages) > 0 {
-			// 没有找到 user 消息，保存最后一条
-			lastMsg := &claudeMessages[len(claudeMessages)-1]
-			content := lastMsg.GetStringContent()
-			if content != "" {
-				info.Other["input_content"] = content
-			} else {
-				info.Other["input_content"] = lastMsg
-			}
-		}
-	} else {
-		info.Other["input_content"] = info.PromptMessages // 备用方案，保存全部输入内容
-	}
-
 	return info
+}
+
+func cloneRequestHeaders(c *gin.Context) map[string]string {
+	if c == nil || c.Request == nil {
+		return nil
+	}
+	if len(c.Request.Header) == 0 {
+		return nil
+	}
+	headers := make(map[string]string, len(c.Request.Header))
+	for key := range c.Request.Header {
+		value := strings.TrimSpace(c.Request.Header.Get(key))
+		if value == "" {
+			continue
+		}
+		headers[key] = value
+	}
+	if len(headers) == 0 {
+		return nil
+	}
+	return headers
 }
 
 func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Request, ws *websocket.Conn) (*RelayInfo, error) {
