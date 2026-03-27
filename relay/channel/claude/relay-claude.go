@@ -792,6 +792,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	}
 	if responseText := claudeInfo.ResponseText.String(); responseText != "" {
 		info.Other["output_content"] = responseText
+	}
 	if claudeInfo.Usage != nil {
 		claudeInfo.Usage.UsageSemantic = "anthropic"
 	}
